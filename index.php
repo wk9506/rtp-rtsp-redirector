@@ -31,13 +31,13 @@ function process_request() {
             return;
         }
         
-        // 拆分：取第一个'&'之前作为主URL参数，其后作为额外参数
+        // 拆分：改为优先按 playseek 参数分离，以支持主URL中使用 & 作为 RTP/RTSP 分隔符
         $primary_part = $raw_qs;
         $extra_qs = '';
-        $amp_pos = strpos($raw_qs, '&');
-        if ($amp_pos !== false) {
-            $primary_part = substr($raw_qs, 0, $amp_pos);
-            $extra_qs = substr($raw_qs, $amp_pos + 1);
+        $playseek_key_pos = strpos($raw_qs, '&playseek=');
+        if ($playseek_key_pos !== false) {
+            $primary_part = substr($raw_qs, 0, $playseek_key_pos);
+            $extra_qs = substr($raw_qs, $playseek_key_pos + 1); // 保留 "playseek=..." 作为额外参数
         }
         
         // 解析额外参数（例如 playseek）
@@ -53,7 +53,7 @@ function process_request() {
         $url_param = urldecode($primary_part);
         log_message("解析到的URL参数: $url_param");
         
-        // 解析主URL，提取代理基址、RTP路径与RTSP片段
+        // 解析主URL，提取代理基址、RTP路径与RTSP片段（支持 '#' 或 '&rtsp://' 分隔）
         $parts = parse_url($url_param);
         if ($parts === false || !isset($parts['scheme']) || !isset($parts['host'])) {
             send_error_response(400, "URL格式错误：无法解析代理主机");
@@ -62,7 +62,19 @@ function process_request() {
         $proxy_base = $parts['scheme'] . '://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '') . '/';
         $rtp_path_raw = isset($parts['path']) ? $parts['path'] : '';
         $rtp_query_raw = isset($parts['query']) ? $parts['query'] : '';
-        $rtsp_fragment_raw = isset($parts['fragment']) ? $parts['fragment'] : '';
+        $rtsp_fragment_raw = '';
+
+        // 优先使用 fragment（#）分隔；否则在 query 中查找 rtsp://（&rtsp:// 分隔）
+        if (isset($parts['fragment']) && strpos($parts['fragment'], 'rtsp://') === 0) {
+            $rtsp_fragment_raw = $parts['fragment'];
+        } elseif (isset($parts['query'])) {
+            $q = $parts['query'];
+            $rtsp_pos = strpos($q, 'rtsp://');
+            if ($rtsp_pos !== false) {
+                $rtsp_fragment_raw = substr($q, $rtsp_pos);
+                $rtp_query_raw = trim(substr($q, 0, $rtsp_pos), '&');
+            }
+        }
         
         // 构建目标URL
         if ($has_playseek) {

@@ -52,9 +52,12 @@
 - 主 URL 放在查询字符串的第一个片段（直到第一个 `&`）。后续为普通参数，例如 `playseek=...`。
 - 示例主 URL：
   - `http://<代理主机:端口>/rtp://225.1.2.47:10276?fcc=...%23rtsp://10.254.192.94/PLTV/.../smil`
+  - 主 URL 示例：`http://<代理主机:端口>/rtp://225.1.2.47:10276?fcc=...&rtsp://10.254.192.94/PLTV/.../smil`
 - 说明：
   - `#` 必须编码为 `%23` 才能随查询字符串一起发送到服务端。
   - 无 `playseek` → 走直播（`rtp/`）；有 `playseek` → 走回放（`rtsp/`）。
++   - 主 URL 中以 `&rtsp://` 作为直播与回放分界；`playseek` 等常规参数请放在主 URL 之后（例如 `&playseek=3600`）。
++   - 使用 PowerShell 时请运行 `curl.exe` 并用双引号包裹整段 URL，避免 `&` 被解释成命令分隔符。
 
 ## 日志记录
 - 错误日志文件：`middleware_errors.log`（由 `index.php` 的 `error_log` 设置生成）。

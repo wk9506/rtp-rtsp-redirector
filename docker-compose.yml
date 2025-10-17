@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  rtp-rtsp-redirector:
+    # 使用当前仓库的 Dockerfile 本地构建镜像
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtp-rtsp-redirector
+    ports:
+      - "${HOST_PORT:-8888}:8888"
+    restart: unless-stopped
+    # 如果希望直接使用 GHCR 已发布镜像，删除上面的 build 块，
+    # 并改用下方的 image 配置：
+    # image: ghcr.io/wk9506/rtp-rtsp-redirector:latest
+
+# 使用说明：
+#  - 启动（Compose v2）：docker compose up -d
+#    或（Compose v1）：  docker-compose up -d
+#  - 停止：docker compose down
+#  - 查看日志：docker compose logs -f
+#  - 端口：在 .env 或环境变量中设置 HOST_PORT 以修改宿主机端口（默认 8888）
