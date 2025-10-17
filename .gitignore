@@ -1,0 +1,12 @@
+# Ignore local portable PHP bundle
+/php/
+/temp_php_download/
+
+# Logs and temporary
+/middleware_errors.log
+*.log
+*.zip
+
+# OS files
+**/.DS_Store
+Thumbs.db

@@ -1,0 +1,6 @@
+php/
+*.log
+*.zip
+temp_php_download/
+**/.DS_Store
+.git/
