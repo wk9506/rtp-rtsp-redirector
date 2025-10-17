@@ -1,5 +1,6 @@
 # Minimal Docker image for the PHP middleware
-FROM php:8.2-cli
+- FROM php:8.2-cli
++ FROM php:8.2-cli-alpine
 
 # Workdir
 WORKDIR /var/www/html
