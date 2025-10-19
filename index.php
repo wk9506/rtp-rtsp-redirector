@@ -31,16 +31,21 @@ function process_request() {
             return;
         }
         
-        // 拆分：改为优先按 playseek 参数分离，以支持主URL中使用 & 作为 RTP/RTSP 分隔符
+        // 拆分：按最早出现的 playseek 或 r2h-token 分离，以支持主URL中使用 & 作为 RTP/RTSP 分隔符
         $primary_part = $raw_qs;
         $extra_qs = '';
-        $playseek_key_pos = strpos($raw_qs, '&playseek=');
-        if ($playseek_key_pos !== false) {
-            $primary_part = substr($raw_qs, 0, $playseek_key_pos);
-            $extra_qs = substr($raw_qs, $playseek_key_pos + 1); // 保留 "playseek=..." 作为额外参数
+        $playseek_pos = strpos($raw_qs, '&playseek=');
+        $token_pos = strpos($raw_qs, '&r2h-token=');
+        $candidates = [];
+        if ($playseek_pos !== false) $candidates[] = $playseek_pos;
+        if ($token_pos !== false) $candidates[] = $token_pos;
+        if (!empty($candidates)) {
+            $split_pos = min($candidates);
+            $primary_part = substr($raw_qs, 0, $split_pos);
+            $extra_qs = substr($raw_qs, $split_pos + 1); // 去掉前导 '&'
         }
-        
-        // 解析额外参数（例如 playseek）
+
+        // 解析额外参数（例如 playseek、r2h-token）
         $extra_params = [];
         if ($extra_qs !== '') {
             parse_str($extra_qs, $extra_params);
@@ -48,11 +53,16 @@ function process_request() {
         $has_playseek = isset($extra_params['playseek']);
         $playseek_value = $has_playseek ? $extra_params['playseek'] : '';
         log_message("检测到playseek参数: " . ($has_playseek ? "是 ($playseek_value)" : "否"));
-        
+
+        // 新增：解析 r2h-token 参数
+        $has_token = isset($extra_params['r2h-token']);
+        $token_value = $has_token ? $extra_params['r2h-token'] : '';
+        log_message("检测到r2h-token参数: " . ($has_token ? "是 ($token_value)" : "否"));
+
         // 主URL参数可能存在编码，需解码
         $url_param = urldecode($primary_part);
         log_message("解析到的URL参数: $url_param");
-        
+
         // 解析主URL，提取代理基址、RTP路径与RTSP片段（支持 '#' 或 '&rtsp://' 分隔）
         $parts = parse_url($url_param);
         if ($parts === false || !isset($parts['scheme']) || !isset($parts['host'])) {
@@ -78,11 +88,11 @@ function process_request() {
         
         // 构建目标URL
         if ($has_playseek) {
-            $target_url = build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value);
+            $target_url = build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value, $has_token ? $token_value : null);
         } else {
-            $target_url = build_rtp_url($proxy_base, $rtp_path_raw, $rtp_query_raw);
+            $target_url = build_rtp_url($proxy_base, $rtp_path_raw, $rtp_query_raw, $has_token ? $token_value : null);
         }
-        
+
         if (empty($target_url)) {
             send_error_response(500, "构建目标URL失败");
             return;
@@ -99,7 +109,7 @@ function process_request() {
 }
 
 // 构建RTP直播URL
-function build_rtp_url($proxy_base, $rtp_path_raw, $rtp_query_raw) {
+function build_rtp_url($proxy_base, $rtp_path_raw, $rtp_query_raw, $token_value = null) {
     // rtP路径形如 'rtp://225.1.2.47:10276'，需要转换为 'rtp/225.1.2.47:10276'
     if ($rtp_path_raw === '' || strpos($rtp_path_raw, 'rtp://') === false) {
         log_message("警告: 在RTP部分中未找到rtp://前缀");
@@ -110,11 +120,16 @@ function build_rtp_url($proxy_base, $rtp_path_raw, $rtp_query_raw) {
     if (!empty($rtp_query_raw)) {
         $full_url .= '?' . $rtp_query_raw;
     }
+    // 新增：在末尾拼接 r2h-token（避免重复）
+    if (!empty($token_value) && strpos($full_url, 'r2h-token=') === false) {
+        $connector = (strpos($full_url, '?') === false) ? '?' : '&';
+        $full_url .= $connector . 'r2h-token=' . urlencode($token_value);
+    }
     return $full_url;
 }
 
 // 构建RTSP回放URL
-function build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value) {
+function build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value, $token_value = null) {
     // RTSP片段形如 'rtsp://10.254.192.94/PLTV/.../smil'
     if ($rtsp_fragment_raw === '' || strpos($rtsp_fragment_raw, 'rtsp://') !== 0) {
         log_message("警告: 在RTSP部分中未找到rtsp://前缀");
@@ -125,6 +140,10 @@ function build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value) {
     // 根据是否已有查询参数选择连接符
     $connector = (strpos($full_url, '?') === false) ? '?' : '&';
     $full_url .= $connector . 'playseek=' . urlencode($playseek_value);
+    // 新增：在末尾拼接 r2h-token（避免重复）
+    if (!empty($token_value) && strpos($full_url, 'r2h-token=') === false) {
+        $full_url .= '&r2h-token=' . urlencode($token_value);
+    }
     return $full_url;
 }
 
