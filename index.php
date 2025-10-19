@@ -93,7 +93,7 @@ function process_request() {
 
 // 构建RTP直播URL
 function build_rtp_url($proxy_base, $rtp_path_raw, $fcc_value = null, $token_value = null) {
-    // rtP路径形如 'rtp://225.1.2.47:10276'，需要转换为 'rtp/225.1.2.47:10276'
+    // RTP路径形如 'rtp://239.1.2.47:10276'，需要转换为 'rtp/239.1.2.47:10276'
     if ($rtp_path_raw === '' || strpos($rtp_path_raw, 'rtp://') === false) {
         log_message("警告: 在RTP部分中未找到rtp://前缀");
         return null;
@@ -125,7 +125,7 @@ function build_rtp_url($proxy_base, $rtp_path_raw, $fcc_value = null, $token_val
 
 // 构建RTSP回放URL
 function build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value, $token_value = null) {
-    // RTSP片段形如 'rtsp://10.254.192.94/PLTV/.../smil'
+    // RTSP片段形如 'rtsp://192.168.1.50/PLTV/.../smil'
     if ($rtsp_fragment_raw === '' || strpos($rtsp_fragment_raw, 'rtsp://') !== 0) {
         log_message("警告: 在RTSP部分中未找到rtsp://前缀");
         return null;
