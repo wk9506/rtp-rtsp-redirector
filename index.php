@@ -30,74 +30,55 @@ function process_request() {
             send_error_response(400, "缺少URL参数");
             return;
         }
-        
-        // 拆分：按最早出现的 playseek 或 r2h-token 分离，以支持主URL中使用 & 作为 RTP/RTSP 分隔符
-        $primary_part = $raw_qs;
-        $extra_qs = '';
-        $playseek_pos = strpos($raw_qs, '&playseek=');
-        $token_pos = strpos($raw_qs, '&r2h-token=');
-        $candidates = [];
-        if ($playseek_pos !== false) $candidates[] = $playseek_pos;
-        if ($token_pos !== false) $candidates[] = $token_pos;
-        if (!empty($candidates)) {
-            $split_pos = min($candidates);
-            $primary_part = substr($raw_qs, 0, $split_pos);
-            $extra_qs = substr($raw_qs, $split_pos + 1); // 去掉前导 '&'
-        }
 
-        // 解析额外参数（例如 playseek、r2h-token）
-        $extra_params = [];
-        if ($extra_qs !== '') {
-            parse_str($extra_qs, $extra_params);
-        }
-        $has_playseek = isset($extra_params['playseek']);
-        $playseek_value = $has_playseek ? $extra_params['playseek'] : '';
-        log_message("检测到playseek参数: " . ($has_playseek ? "是 ($playseek_value)" : "否"));
+        // 新格式：命名参数模式（单链接同时携带直播与回放源）
+        parse_str($raw_qs, $qs_all);
 
-        // 新增：解析 r2h-token 参数
-        $has_token = isset($extra_params['r2h-token']);
-        $token_value = $has_token ? $extra_params['r2h-token'] : '';
-        log_message("检测到r2h-token参数: " . ($has_token ? "是 ($token_value)" : "否"));
-
-        // 主URL参数可能存在编码，需解码
-        $url_param = urldecode($primary_part);
-        log_message("解析到的URL参数: $url_param");
-
-        // 解析主URL，提取代理基址、RTP路径与RTSP片段（支持 '#' 或 '&rtsp://' 分隔）
-        $parts = parse_url($url_param);
-        if ($parts === false || !isset($parts['scheme']) || !isset($parts['host'])) {
-            send_error_response(400, "URL格式错误：无法解析代理主机");
+        // 必填参数校验：proxy、rtp、rtsp
+        if (!isset($qs_all['proxy']) || !isset($qs_all['rtp']) || !isset($qs_all['rtsp'])) {
+            send_error_response(400, "缺少必需参数：proxy、rtp、rtsp");
             return;
         }
-        $proxy_base = $parts['scheme'] . '://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '') . '/';
-        $rtp_path_raw = isset($parts['path']) ? $parts['path'] : '';
-        $rtp_query_raw = isset($parts['query']) ? $parts['query'] : '';
-        $rtsp_fragment_raw = '';
 
-        // 优先使用 fragment（#）分隔；否则在 query 中查找 rtsp://（&rtsp:// 分隔）
-        if (isset($parts['fragment']) && strpos($parts['fragment'], 'rtsp://') === 0) {
-            $rtsp_fragment_raw = $parts['fragment'];
-        } elseif (isset($parts['query'])) {
-            $q = $parts['query'];
-            $rtsp_pos = strpos($q, 'rtsp://');
-            if ($rtsp_pos !== false) {
-                $rtsp_fragment_raw = substr($q, $rtsp_pos);
-                $rtp_query_raw = trim(substr($q, 0, $rtsp_pos), '&');
-            }
+        // 解析代理地址
+        $proxy_url = urldecode($qs_all['proxy']);
+        $p = parse_url($proxy_url);
+        if ($p === false || !isset($p['scheme']) || !isset($p['host'])) {
+            send_error_response(400, "代理地址格式错误：proxy");
+            return;
         }
-        
-        // 构建目标URL
+        $proxy_base = $p['scheme'] . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '') . '/';
+
+        // 解析业务参数
+        $has_playseek = isset($qs_all['playseek']);
+        $playseek_value = $has_playseek ? $qs_all['playseek'] : '';
+        $has_token = isset($qs_all['r2h-token']);
+        $token_value = $has_token ? $qs_all['r2h-token'] : '';
+
+        $rtp_param = urldecode($qs_all['rtp']);
+        $rtsp_param = urldecode($qs_all['rtsp']);
+
+        // 若 rtp 参数带了查询（例如 ?fcc=...），解析出原始 query
+        $rtp_query_raw = '';
+        $rp = parse_url($rtp_param);
+        if ($rp !== false && isset($rp['query'])) {
+            $rtp_query_raw = $rp['query'];
+        }
+
+        // 根据 playseek 决定直播或回放
         if ($has_playseek) {
-            $target_url = build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value, $has_token ? $token_value : null);
+            $target_url = build_rtsp_url($proxy_base, $rtsp_param, $playseek_value, $has_token ? $token_value : null);
+            log_message("命名参数模式-回放: proxy=$proxy_base, rtsp=$rtsp_param, playseek=$playseek_value" . ($has_token ? ", token=$token_value" : ""));
         } else {
-            $target_url = build_rtp_url($proxy_base, $rtp_path_raw, $rtp_query_raw, $has_token ? $token_value : null);
+            $target_url = build_rtp_url($proxy_base, $rtp_param, $rtp_query_raw, $has_token ? $token_value : null);
+            log_message("命名参数模式-直播: proxy=$proxy_base, rtp=$rtp_param" . (!empty($rtp_query_raw) ? ", rtp_query=$rtp_query_raw" : "") . ($has_token ? ", token=$token_value" : ""));
         }
 
         if (empty($target_url)) {
             send_error_response(500, "构建目标URL失败");
             return;
         }
-        
+
         log_message("重定向到: $target_url");
         header("Location: $target_url", true, 302);
         exit;
@@ -120,7 +101,6 @@ function build_rtp_url($proxy_base, $rtp_path_raw, $rtp_query_raw, $token_value 
     if (!empty($rtp_query_raw)) {
         $full_url .= '?' . $rtp_query_raw;
     }
-    // 新增：在末尾拼接 r2h-token（避免重复）
     if (!empty($token_value) && strpos($full_url, 'r2h-token=') === false) {
         $connector = (strpos($full_url, '?') === false) ? '?' : '&';
         $full_url .= $connector . 'r2h-token=' . urlencode($token_value);
@@ -137,10 +117,8 @@ function build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value, $token
     }
     $rtsp_path = ltrim(str_replace('rtsp://', 'rtsp/', $rtsp_fragment_raw), '/');
     $full_url = rtrim($proxy_base, '/') . '/' . $rtsp_path;
-    // 根据是否已有查询参数选择连接符
     $connector = (strpos($full_url, '?') === false) ? '?' : '&';
     $full_url .= $connector . 'playseek=' . urlencode($playseek_value);
-    // 新增：在末尾拼接 r2h-token（避免重复）
     if (!empty($token_value) && strpos($full_url, 'r2h-token=') === false) {
         $full_url .= '&r2h-token=' . urlencode($token_value);
     }
