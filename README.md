@@ -1,41 +1,57 @@
-# PHP 直播流中间件（RTP/RTSP 路由）
+# PHP 直播流中间件（命名参数单链接）
+
+本项目是一个基于 PHP 的轻量中间件，使用“命名参数的单链接”同时携带直播与回放源。根据是否存在 `playseek` 自动选择目标源并重定向到上级代理。
+
 - 直播（无 `playseek`）：重定向到 `<代理基址>/rtp/...`
 - 回放（有 `playseek`）：重定向到 `<代理基址>/rtsp/...?...playseek=...`
-- 支持携带 `r2h-token`：无论直播/回放，都会在重定向 URL 末尾追加 `r2h-token=...`（若源 URL 已包含则不重复）。
-- 直播（无 `playseek`）：重定向到 `<代理基址>/rtp/...`
-- 回放（有 `playseek`）：重定向到 `<代理基址>/rtsp/...?...playseek=...`
-- 服务默认监听 `0.0.0.0:8888`
+- `r2h-token`：作为上级代理的验证参数，会被自动追加到重定向 URL 末尾（若目标 URL 已包含该参数则不重复）
+- 服务监听 `0.0.0.0:8888`
 
 ## 工作原理
-- 请求格式：将“主 URL + 参数”放在查询字符串中。
-  - 主 URL 示例：`http://<代理主机:端口>/rtp://225.1.2.47:10276?fcc=...#rtsp://10.254.192.94/PLTV/.../smil`
-  - 注意：`#` 必须 URL 编码为 `%23`，否则浏览器/客户端不会把 `#` 后内容发送到服务器。
-- 解析逻辑：
-  - 解析主 URL 的 `scheme://host[:port]/` 作为上级代理基址（动态，无需硬编码）。
-  - `rtp://...` 作为直播路径，拼接为 `rtp/...`。
-  - `rtsp://...` 作为回放路径，拼接为 `rtsp/...`。
-  - 若额外参数里有 `playseek`，则走回放；否则走直播。
+- 统一采用“命名参数单链接”，不再使用特殊分隔符拼接主 URL（旧格式已移除）。
+- 必要参数：
+  - `proxy`：上级代理基址，例如 `http://192.168.1.2:7890`
+  - `rtp`：直播源，例如 `rtp://225.1.2.47:10276`（可带查询 `?fcc=...`）
+  - `rtsp`：回放源，例如 `rtsp://10.254.192.94/PLTV/.../smil`
+- 选择逻辑：
+  - 存在 `playseek` → 选择 `rtsp` 并在目标 URL 追加 `playseek`
+  - 不存在 `playseek` → 选择 `rtp`
+- 附加参数：
+  - `r2h-token` 作为代理验证参数，若存在，会自动追加到最终重定向 URL 的查询字符串末尾（防重复）
+
+## 请求格式
+- 直播（无 `playseek`）：
+  - `http://localhost:8888/?proxy=http://192.168.1.2:7890&rtp=rtp://225.1.2.47:10276&rtsp=rtsp://10.254.192.94/PLTV/.../smil&r2h-token=abc123`
+  - 重定向到：`http://192.168.1.2:7890/rtp/225.1.2.47:10276?r2h-token=abc123`
+- 回放（有 `playseek`）：
+  - `http://localhost:8888/?proxy=http://192.168.1.2:7890&rtp=rtp://225.1.2.47:10276&rtsp=rtsp://10.254.192.94/PLTV/.../smil&playseek=3600&r2h-token=abc123`
+  - 重定向到：`http://192.168.1.2:7890/rtsp/10.254.192.94/PLTV/.../smil?playseek=3600&r2h-token=abc123`
+
+## 安全与认证
+- `r2h-token` 是上级代理的验证参数，应视为敏感信息：
+  - 默认代码在日志中仅记录“是否存在 token”，不打印明文；如需更严格可屏蔽所有与 token 相关的日志。
+  - 推荐通过 HTTPS 调用中间件与上级代理，避免中间人攻击。
+  - 在反向代理层可对敏感查询参数做访问控制与日志脱敏。
 
 ## 快速开始（本地 Windows）
-- 准备：将 Windows 版便携 PHP 解压到项目 `php/` 目录，使其中包含 `php.exe`。
-- 启动：在项目根目录执行 `./start_php_middleware.bat`
-- 访问：`http://localhost:8888/`
-
-## 请求示例
-- 直播（无 `playseek`，带 `r2h-token`）：
-  - `curl -I "http://localhost:8888/?http://192.168.1.2:7890/rtp://225.1.2.47:10276?fcc=10.254.185.70:15970%23rtsp://10.254.192.94/PLTV/88888888/224/3221225621/10000100000000060000000000009742_0.smil&r2h-token=abc123"`
-  - 重定向到：`http://192.168.1.2:7890/rtp/225.1.2.47:10276?fcc=10.254.185.70:15970&r2h-token=abc123`
-- 回放（含 `playseek` 与 `r2h-token`）：
-  - `curl -I "http://localhost:8888/?http://192.168.1.2:7890/rtp://225.1.2.47:10276?fcc=10.254.185.70:15970%23rtsp://10.254.192.94/PLTV/88888888/224/3221225621/10000100000000060000000000009742_0.smil&playseek=3600&r2h-token=abc123"`
-  - 重定向到：`http://192.168.1.2:7890/rtsp/10.254.192.94/PLTV/.../smil?playseek=3600&r2h-token=abc123`
+- 便携 PHP 方式：
+  - 在项目根目录创建 `php/` 目录，将官方 Windows 版 PHP Zip 解压至其中，保证存在 `php\php.exe`
+  - 启动脚本：在项目根目录运行 `./start_php_middleware.bat`
+  - 访问：`http://localhost:8888/`
+- 已安装 PHP 的直接命令：
+  - `php -S 0.0.0.0:8888 -t . index.php`
 
 ## Docker 使用
 - 本地构建：
   - `docker build -t rtp-rstp:local .`
 - 运行容器：
   - `docker run --rm -p 8888:8888 rtp-rstp:local`
-- 测试请求：同上（把 `localhost:8888` 端口映射到容器）。
-- GitHub Actions（GHCR）：已提供工作流 `.github/workflows/docker-image.yml`，推送到 `main` 分支后自动构建并发布镜像到 `ghcr.io/<你的用户名>/<仓库名>:latest`。
+- Docker Compose：
+  - 启动（Compose v2）：`docker compose up -d`
+  - 停止：`docker compose down`
+  - 查看日志：`docker compose logs -f`
+- GitHub Actions（GHCR）：
+  - 推送到 `main` 后自动构建并发布到 `ghcr.io/<你的用户名>/<仓库名>:latest`（工作流在 `.github/workflows/docker-image.yml`）
   - 拉取：`docker pull ghcr.io/<你的用户名>/<仓库名>:latest`
   - 运行：`docker run --rm -p 8888:8888 ghcr.io/<你的用户名>/<仓库名>:latest`
 
@@ -44,101 +60,27 @@
 - 启动脚本（本地）：`start_php_middleware.bat`
 - 容器构建：`Dockerfile`、`.dockerignore`
 - CI/CD：`.github/workflows/docker-image.yml`
-- 文档：`README_PHP.md`、`README_DOCKER.md`
+- 文档：`README.md`
 - 忽略：`.gitignore`（忽略 `php/` 便携目录、日志等）
 
 ## 注意事项
-- URL 格式说明
-- 主 URL 放在查询字符串的第一个片段（直到第一个 `&`，或使用 `&rtsp://` 作为分界）。后续为普通参数，例如 `playseek=...`、`r2h-token=...`。
-- `r2h-token` 可在 `playseek` 前或后出现，都会被自动追加到目标 URL；若目标 URL 已含有 `r2h-token`，不会重复追加。
-- 使用 PowerShell 时请运行 `curl.exe` 并用双引号包裹整段 URL，避免 `&` 被解释成命令分隔符。
-- 示例主 URL：
-  - `http://<代理主机:端口>/rtp://225.1.2.47:10276?fcc=...%23rtsp://10.254.192.94/PLTV/.../smil`
-  - 主 URL 示例：`http://<代理主机:端口>/rtp://225.1.2.47:10276?fcc=...&rtsp://10.254.192.94/PLTV/.../smil`
-- 说明：
-  - `#` 必须编码为 `%23` 才能随查询字符串一起发送到服务端。
-  - 无 `playseek` → 走直播（`rtp/`）；有 `playseek` → 走回放（`rtsp/`）。
-+   - 主 URL 中以 `&rtsp://` 作为直播与回放分界；`playseek` 等常规参数请放在主 URL 之后（例如 `&playseek=3600`）。
-+   - 使用 PowerShell 时请运行 `curl.exe` 并用双引号包裹整段 URL，避免 `&` 被解释成命令分隔符。
+- 仅支持“命名参数单链接”的新格式；旧的主 URL 分隔格式（如 `#rtsp://` 或 `&rtsp://`）已移除
+- 参数建议使用 URL 编码，或在命令行中用双引号包裹整段 URL
+- PowerShell 使用 `curl.exe` 并用双引号包裹 URL，避免 `&` 被解释为命令分隔符
+- `rtp` 参数若包含查询（例如 `?fcc=...`），会被保留并拼至直播重定向 URL 中
+- `r2h-token` 会自动追加到目标 URL 查询末尾；如果目标已含该参数，不会重复追加
 
 ## 日志记录
-- 错误日志文件：`middleware_errors.log`（由 `index.php` 的 `error_log` 设置生成）。
-- 记录内容：时间戳、原始请求 URL、`playseek` 检测结果、重定向目标、异常信息。
-- 容器运行时日志输出到标准输出；如需持久化日志可挂载卷或修改日志路径。
-
-## Windows 本地启动
-- 使用脚本：`./start_php_middleware.bat`
-  - 优先使用项目目录下 `php\php.exe`（便携版），否则尝试系统 PATH 中的 `php`。
-  - 若启动失败，请在项目 `php/` 目录放置官方 ZIP 解压后的 `php.exe`。
-- 直接命令（已安装 PHP）：
-  - `php -S 0.0.0.0:8888 -t . index.php`
+- 错误日志文件：`middleware_errors.log`
+- 记录内容：时间戳、原始请求参数、选择模式（直播/回放）、重定向目标、异常信息
+- 建议：对 token 做日志脱敏处理（不打印明文）
 
 ## 故障排除
-- 服务无法启动：确保存在可用的 `php.exe` 或使用 Docker 方式。
-- 请求 400：检查主 URL 是否完整且是否对 `#` 做了 `%23` 编码。
-- 请求 500：查看 `middleware_errors.log` 获取异常详情。
-- 重定向异常：确认 `playseek` 是否正确传递，且上级代理可用。
-- PowerShell 下 `curl` 混淆：请使用 `curl.exe`，并用双引号包裹整段 URL（避免 `&` 被解释）。
-- 上级代理地址由主 URL 动态解析（例如 `http://192.168.1.2:7890/...`），无需在代码里写死。
-- 生产环境可通过反向代理将容器的 `8888` 暴露为你的公开地址（如 `http://192.168.1.100:8888`）。
+- 400：缺少必需参数 `proxy` / `rtp` / `rtsp` 或格式错误
+- 500：构建目标 URL 失败，请查看 `middleware_errors.log` 获取详情
+- 无法启动：本机缺少 PHP 或端口占用；可使用 Docker 或修改端口
+- PowerShell 下 `curl` 混淆：请使用 `curl.exe`，并用双引号包裹完整 URL
 
-## 便携版 PHP 说明
-- 适用场景：本机未安装 PHP 或不希望改动系统 PATH。
-- 准备步骤：
-  - 在项目根目录创建 `php/` 目录（已存在可跳过）。
-  - 将官方 Windows 版 PHP 的 Zip 包解压到 `php/`，确保存在 `php\php.exe`。
-  - 启动脚本会优先使用 `php\php.exe`，无需系统安装。
-- 约定与忽略：
-  - `php/` 为本地运行的便携目录，已在 `.gitignore` 与 `.dockerignore` 中忽略，不会被提交或打包到镜像。
-- 常见问题：
-  - 启动报错“PHP not found”：确认 `php\php.exe` 路径正确；或改用 Docker。
-  - PowerShell 使用 `curl` 时出现交互提示：请使用 `curl.exe` 并用双引号包裹完整 URL。
-  - 端口占用：修改脚本或 Docker 端口映射为其他端口。
-
-## Docker 与 CI/CD（汇总）
-- 本地构建与运行：
-  - 构建：`docker build -t rtp-rstp:local .`
-  - 运行：`docker run --rm -p 8888:8888 rtp-rstp:local`
-- GHCR 自动构建与发布：
-  - 工作流：`.github/workflows/docker-image.yml`（推送 `main` 自动构建并推送到 `ghcr.io/<你的用户名>/<仓库名>`）。
-  - 拉取：`docker pull ghcr.io/<你的用户名>/<仓库名>:latest`
-  - 运行：`docker run --rm -p 8888:8888 ghcr.io/<你的用户名>/<仓库名>:latest`
-- 额外说明：
-  - 容器内服务监听 `0.0.0.0:8888`；`php/` 便携目录不会进入镜像。
-  - 如需公开访问，可在反向代理层映射到 `http://192.168.1.100:8888`。
-
-## 请求格式（命名参数，单链接同时携带直播与回放源）
-- 参数：
-  - `proxy`：上级代理基址（示例：`http://192.168.1.2:7890`）
-  - `rtp`：直播源（示例：`rtp://225.1.2.47:10276`；可带 `?fcc=...`）
-  - `rtsp`：回放源（示例：`rtsp://10.254.192.94/PLTV/.../smil`）
-  - `playseek`：存在则走回放，不存在则走直播
-  - `r2h-token`：会自动追加到重定向 URL 末尾
-- 示例：
-  - 直播：
-    - `http://localhost:8888/?proxy=http://192.168.1.2:7890&rtp=rtp://225.1.2.47:10276&rtsp=rtsp://10.254.192.94/PLTV/.../smil&r2h-token=abc123`
-    - 重定向到：`http://192.168.1.2:7890/rtp/225.1.2.47:10276?r2h-token=abc123`
-  - 回放：
-    - `http://localhost:8888/?proxy=http://192.168.1.2:7890&rtp=rtp://225.1.2.47:10276&rtsp=rtsp://10.254.192.94/PLTV/.../smil&playseek=3600&r2h-token=abc123`
-    - 重定向到：`http://192.168.1.2:7890/rtsp/10.254.192.94/PLTV/.../smil?playseek=3600&r2h-token=abc123`
-
-## 注意事项
-- 仅支持命名参数模式；旧的主 URL 分隔格式已移除。
-- 命令行建议用双引号包裹整段 URL；PowerShell 请使用 `curl.exe`，避免 `&` 被解释为命令分隔符。
-- 示例：
-  - 直播：
-    - `http://localhost:8888/?proxy=http://192.168.1.2:7890&rtp=rtp://225.1.2.47:10276&rtsp=rtsp://10.254.192.94/PLTV/.../smil&r2h-token=abc123`
-    - 重定向到：`http://192.168.1.2:7890/rtp/225.1.2.47:10276?r2h-token=abc123`
-  - 回放：
-    - `http://localhost:8888/?proxy=http://192.168.1.2:7890&rtp=rtp://225.1.2.47:10276&rtsp=rtsp://10.254.192.94/PLTV/.../smil&playseek=3600&r2h-token=abc123`
-    - 重定向到：`http://192.168.1.2:7890/rtsp/10.254.192.94/PLTV/.../smil?playseek=3600&r2h-token=abc123`
-
-## 兼容请求格式（旧版）
-- 支持 `#rtsp://`（需编码为 `%23`）或 `&rtsp://` 分隔的主 URL 格式；其后跟 `playseek`、`r2h-token` 等参数。
-- 支持 `r2h-token`：无论直播/回放，都会在重定向 URL 末尾追加 `r2h-token=...`（若源 URL 已包含则不重复）。
-- 直播（无 `playseek`）：重定向到 `<代理基址>/rtp/...`
-- 回放（有 `playseek`）：重定向到 `<代理基址>/rtsp/...?...playseek=...`
-- 支持携带 `r2h-token`：无论直播/回放，都会在重定向 URL 末尾追加 `r2h-token=...`（若源 URL 已包含则不重复）。
-- 直播（无 `playseek`）：重定向到 `<代理基址>/rtp/...`
-- 回放（有 `playseek`）：重定向到 `<代理基址>/rtsp/...?...playseek=...`
-- 服务默认监听 `0.0.0.0:8888`
+## 变更说明
+- 统一为“命名参数单链接”：`proxy`、`rtp`、`rtsp`、`playseek`、`r2h-token`
+- 移除旧格式（主 URL + 分隔符），提升跨环境兼容性与可维护性
