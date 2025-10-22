@@ -122,6 +122,15 @@ function build_rtp_url($proxy_base, $rtp_path_raw, $fcc_value = null, $token_val
         return null;
     }
 
+    // 回退提取：若独立 fcc 参数为空，尝试从 rtp 查询串中提取一次 fcc
+    if ((empty($fcc_value) || $fcc_value === null) && isset($rp['query']) && $rp['query'] !== '') {
+        parse_str($rp['query'], $rtp_qs);
+        if (isset($rtp_qs['fcc']) && $rtp_qs['fcc'] !== '') {
+            $fcc_value = $rtp_qs['fcc'];
+            log_message("从rtp查询串回退提取fcc: $fcc_value");
+        }
+    }
+
     $rtp_host_port = $rp['host'] . (isset($rp['port']) ? ':' . $rp['port'] : '');
     $rtp_path = 'rtp/' . $rtp_host_port;
 
