@@ -31,12 +31,17 @@ function process_request() {
             return;
         }
 
-        // 仅支持命名参数模式（单链接同时携带直播与回放源）
         parse_str($raw_qs, $qs_all);
 
-        // 必填参数校验：proxy、rtp、rtsp
-        if (!isset($qs_all['proxy']) || !isset($qs_all['rtp']) || !isset($qs_all['rtsp'])) {
-            send_error_response(400, "缺少必需参数：proxy、rtp、rtsp");
+        // 必填：proxy；rtp/rtsp至少一个
+        if (!isset($qs_all['proxy'])) {
+            send_error_response(400, "缺少必需参数：proxy");
+            return;
+        }
+        $has_rtp = isset($qs_all['rtp']);
+        $has_rtsp = isset($qs_all['rtsp']);
+        if (!$has_rtp && !$has_rtsp) {
+            send_error_response(400, "至少提供一个源参数：rtp 或 rtsp");
             return;
         }
 
@@ -54,26 +59,38 @@ function process_request() {
         $playseek_value = $has_playseek ? $qs_all['playseek'] : '';
         $has_token = isset($qs_all['r2h-token']);
         $token_value = $has_token ? $qs_all['r2h-token'] : '';
-        // 日志脱敏：仅记录是否存在，不打印明文
         log_message("检测到r2h-token参数: " . ($has_token ? "是" : "否"));
 
-        // 新增：可选 fcc 参数（直播专用）
+        // 可选 fcc（直播专用）
         $has_fcc = isset($qs_all['fcc']);
         $fcc_value = $has_fcc ? $qs_all['fcc'] : '';
         log_message("检测到fcc参数: " . ($has_fcc ? "是 ($fcc_value)" : "否"));
 
-        $rtp_param = urldecode($qs_all['rtp']);
-        $rtsp_param = urldecode($qs_all['rtsp']);
+        $rtp_param = $has_rtp ? urldecode($qs_all['rtp']) : '';
+        $rtsp_param = $has_rtsp ? urldecode($qs_all['rtsp']) : '';
 
-        // 根据 playseek 决定直播或回放
-        if ($has_playseek) {
+        // 选择逻辑
+        if ($has_playseek && $has_rtsp) {
+            // 回放优先：存在playseek且提供rtsp → RTSP并追加playseek
             $target_url = build_rtsp_url($proxy_base, $rtsp_param, $playseek_value, $has_token ? $token_value : null);
-            log_message("命名参数模式-回放: proxy=$proxy_base, rtsp=$rtsp_param, playseek=$playseek_value" . ($has_token ? ", token=***" : ""));
-        } else {
-            // 直播：传入 fcc（若存在）
+            log_message("选择RTSP(回放): proxy=$proxy_base, rtsp=$rtsp_param, playseek=$playseek_value" . ($has_token ? ", token=***" : ""));
+        } elseif (!$has_playseek && $has_rtp) {
+            // 无playseek且有rtp → 直播
             $target_url = build_rtp_url($proxy_base, $rtp_param, $has_fcc ? $fcc_value : null, $has_token ? $token_value : null);
             $fcc_log = ($has_fcc ? ", fcc=$fcc_value" : "");
-            log_message("命名参数模式-直播: proxy=$proxy_base, rtp=$rtp_param$fcc_log" . ($has_token ? ", token=***" : ""));
+            log_message("选择RTP(直播): proxy=$proxy_base, rtp=$rtp_param$fcc_log" . ($has_token ? ", token=***" : ""));
+        } elseif ($has_rtsp) {
+            // 仅rtsp（可能带或不带playseek）→ RTSP；不忽略playseek
+            $target_url = build_rtsp_url($proxy_base, $rtsp_param, $has_playseek ? $playseek_value : null, $has_token ? $token_value : null);
+            log_message("选择RTSP: proxy=$proxy_base, rtsp=$rtsp_param" . ($has_playseek ? ", playseek=$playseek_value" : "") . ($has_token ? ", token=***" : ""));
+        } elseif ($has_rtp) {
+            // 仅rtp且提供了playseek但没有rtsp → 忽略playseek，直播
+            if ($has_playseek) {
+                log_message("检测到playseek但未提供rtsp，已忽略playseek");
+            }
+            $target_url = build_rtp_url($proxy_base, $rtp_param, $has_fcc ? $fcc_value : null, $has_token ? $token_value : null);
+            $fcc_log = ($has_fcc ? ", fcc=$fcc_value" : "");
+            log_message("选择RTP(仅rtp): proxy=$proxy_base, rtp=$rtp_param$fcc_log" . ($has_token ? ", token=***" : ""));
         }
 
         if (empty($target_url)) {
@@ -124,7 +141,7 @@ function build_rtp_url($proxy_base, $rtp_path_raw, $fcc_value = null, $token_val
 }
 
 // 构建RTSP回放URL
-function build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value, $token_value = null) {
+function build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value = null, $token_value = null) {
     // RTSP片段形如 'rtsp://192.168.1.50/PLTV/.../smil'
     if ($rtsp_fragment_raw === '' || strpos($rtsp_fragment_raw, 'rtsp://') !== 0) {
         log_message("警告: 在RTSP部分中未找到rtsp://前缀");
@@ -147,13 +164,16 @@ function build_rtsp_url($proxy_base, $rtsp_fragment_raw, $playseek_value, $token
         $full_url .= '?' . ltrim($rp['query'], "&?");
     }
 
-    // 根据是否已有查询参数选择连接符，再追加 playseek
-    $connector = (strpos($full_url, '?') === false) ? '?' : '&';
-    $full_url .= $connector . 'playseek=' . urlencode($playseek_value);
+    // 追加 playseek（仅当提供时）
+    if ($playseek_value !== null && $playseek_value !== '') {
+        $connector = (strpos($full_url, '?') === false) ? '?' : '&';
+        $full_url .= $connector . 'playseek=' . urlencode($playseek_value);
+    }
 
     // 追加 r2h-token（避免重复）
     if (!empty($token_value) && strpos($full_url, 'r2h-token=') === false) {
-        $full_url .= '&r2h-token=' . urlencode($token_value);
+        $connector = (strpos($full_url, '?') === false) ? '?' : '&';
+        $full_url .= $connector . 'r2h-token=' . urlencode($token_value);
     }
     return $full_url;
 }

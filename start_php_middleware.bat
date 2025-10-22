@@ -33,7 +33,10 @@ echo ==================================================
 echo Starting PHP built-in server...
 echo Press Ctrl+C to stop
 
-REM Start server
-%PHP_BIN% -S %PHP_HOST%:%PHP_PORT% -t "%DOCUMENT_ROOT%" index.php
+REM Switch to script directory to avoid trailing-backslash issues
+cd /d "%~dp0"
+
+REM Start server (use -t . to avoid quoted backslash parsing problems)
+%PHP_BIN% -S %PHP_HOST%:%PHP_PORT% -t . index.php
 
 pause
